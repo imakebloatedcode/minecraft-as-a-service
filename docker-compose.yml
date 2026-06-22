@@ -256,6 +256,10 @@ services:
     networks:
       - app_network
     entrypoint: sh -c "cp /config/* /app/run && java -jar /app/ViaProxy.jar config viaproxy.yml"
+    # For some reason viaproxy needs this. I am guessing it looks up DNS at start time, and docker's dns does not resolve a container that has not been created yet
+    depends_on:
+      limbo:
+        condition: service_healthy
   proxy:
     image: itzg/mc-proxy
     environment:
