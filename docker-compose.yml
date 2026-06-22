@@ -249,11 +249,17 @@ services:
     depends_on:
       runner:
         condition: service_healthy
+  limbo-proxy:
+    image: ghcr.io/viaversion/viaproxy
+    volumes:
+      - "./config/viaproxy:/config"
+    networks:
+      - app_network
+    entrypoint: sh -c "cp /config/* /app/run && java -jar /app/ViaProxy.jar config viaproxy.yml"
   proxy:
     image: itzg/mc-proxy
     environment:
       TYPE: "VELOCITY"
-      PLUGINS: "https://hangarcdn.papermc.io/plugins/ViaVersion/ViaVersion/versions/5.10.0/PAPER/ViaVersion-5.10.0.jar" # Bump this on each release
       JVM_OPTS: "-Dvelocity.packet-decode-logging=true"
       INIT_MEMORY: "50M"
       MAX_MEMORY: "2G"
