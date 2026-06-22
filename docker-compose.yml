@@ -1,0 +1,274 @@
+services:
+  mongo:
+    image: mongo:6
+    container_name: mongo
+    restart: unless-stopped
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - ./data/db_data:/data/db
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mongo-init:
+    image: mongo:6
+    container_name: mongo-init
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - app_network
+    restart: "no"
+    entrypoint: >
+      bash -c "
+      mongosh --host mongo:27017 --eval '
+        try {
+          rs.initiate({
+            _id: \"rs0\",
+            members: [{ _id: 0, host: \"mongo:27017\" }]
+          });
+        } catch (e) {
+          print(e);
+        }
+      '
+      "
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    security_opt:
+      - "no-new-privileges:true"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_VOLUMES=/data/rustfs0
+      - RUSTFS_ADDRESS=0.0.0.0:9000
+      - RUSTFS_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_CONSOLE_ADDRESS=0.0.0.0:9001
+      - RUSTFS_CONSOLE_ENABLE=true
+      - RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS=*
+      - RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY}
+      - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY}
+      - RUSTFS_OBS_LOGGER_LEVEL=info
+      - RUSTFS_UNSAFE_BYPASS_DISK_CHECK=${RUSTFS_UNSAFE_BYPASS_DISK_CHECK:-false}
+
+    volumes:
+      - ./data/rustfs0:/data/rustfs0
+      - ./logs/rustfs:/app/logs
+    networks:
+      - app_network
+    restart: unless-stopped
+
+    healthcheck:
+      test: [
+          "CMD",
+          "sh",
+          "-ec",
+          "host=\"$${RUSTFS_HEALTHCHECK_HOST:-127.0.0.1}\"; scheme=\"http\"; set -- -fsS; \
+          if [ -n \"$${RUSTFS_TLS_PATH:-}\" ]; then \
+          scheme=\"https\"; \
+          ca_path=\"$${RUSTFS_HEALTHCHECK_CA:-}\"; \
+          if [ -z \"$${ca_path}\" ] && [ -f /opt/tls/ca.crt ]; then ca_path=/opt/tls/ca.crt; fi; \
+          case \"$${host}\" in 127.0.0.1|localhost) strict_host=false ;; *) strict_host=true ;; esac; \
+          if [ \"$${strict_host}\" = true ] && [ -n \"$${ca_path}\" ]; then \
+          set -- \"$${@}\" --cacert \"$${ca_path}\" --resolve \"$${host}:9000:127.0.0.1\" --resolve \"$${host}:9001:127.0.0.1\"; \
+          else \
+          set -- \"$${@}\" -k; \
+          fi; \
+          fi; \
+          curl \"$${@}\" \"$${scheme}://$${host}:9000/health\" && \
+          curl \"$${@}\" \"$${scheme}://$${host}:9001/rustfs/console/health\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  volume-permission-helper:
+    image: alpine
+    volumes:
+      - ./data/rustfs0:/data0
+      - ./logs:/logs
+    command: >
+      sh -c "
+        chown -R 10001:10001 /data0 /logs &&
+        echo 'Volume Permissions fixed' &&
+        exit 0
+      "
+    restart: "no"
+
+  dind:
+    image: docker:24-dind
+    container_name: dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    networks:
+      - app_network
+    expose:
+      - "2375"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 2375 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - "./tmp:/tmpmnt"
+      - "./data/downloads:/mc_downloads"
+      - "./java/helperJars:/helperJars"
+    command: [--tls=false]
+
+  web:
+    build:
+      context: ./bun
+      args:
+        APP_NAME: web
+    container_name: web
+    restart: unless-stopped
+    environment:
+      DATABASE_URI: "mongodb://mongo:27017/?replicaSet=rs0"
+      REDIS_URI: "redis://redis:6379"
+      S3_ENDPOINT: "http://rustfs:9000"
+      PUBLIC_S3_ENDPOINT: "http://127.0.0.1:9000"
+      S3_BUCKET: "data"
+      S3_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY}
+      S3_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY}
+    ports:
+      - "80:80"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
+    networks:
+      - app_network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          "wget -q --spider --timeout=2 http://127.0.0.1:80/_status || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  runner:
+    build:
+      context: ./bun
+      args:
+        APP_NAME: runner
+    container_name: runner
+    restart: unless-stopped
+    environment:
+      DATABASE_URI: "mongodb://mongo:27017/?replicaSet=rs0"
+      REDIS_URI: "redis://redis:6379"
+      DOCKER_HOST: "tcp://dind:2375"
+      DOCKER_TLS_CERTDIR: ""
+      SERVER_HOSTNAME: "runner"
+      WEB_URL: ${WEB_PROTOCOL}://${WEB_HOSTNAME}
+      DOCKER_HOSTNAME: "dind"
+      S3_ENDPOINT: "http://rustfs:9000"
+      PUBLIC_S3_ENDPOINT: "http://127.0.0.1:9000"
+      S3_BUCKET: "data"
+      S3_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY}
+      S3_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY}
+      DATA_TEMPDIR: /tmpmnt
+      EXTRACT_BASE: /mc_downloads
+      HELPER_JARS_DIRECTORY: /helperJars
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dind:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
+    networks:
+      - app_network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          "wget -q --spider --timeout=2 http://127.0.0.1:80/_status || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    working_dir: /workdir
+    volumes:
+      - "./tmp:/tmpmnt"
+      - "./data/downloads:/mc_downloads"
+      - "./java/helperJars:/helperJars"
+
+  limbo:
+    image: itzg/minecraft-server:latest
+    environment:
+      EULA: "TRUE"
+      TYPE: "LIMBO"
+      USE_MEOWICE_FLAGS: "true"
+      SERVER_PORT: "25565"
+      ONLINE_MODE: "FALSE"
+      CUSTOM_SERVER_PROPERTIES: |
+        bungeecord=true
+      INIT_MEMORY: "50M"
+      MAX_MEMORY: "1G"
+      LIMBO_BUILD: "74"
+    volumes:
+      - "./data/internalServerData/limbo:/data"
+      - "./java/limbo/target/ServerLimbo-0.0.0.jar:/data/plugins/ServerLimbo.jar"
+    networks:
+      - app_network
+    depends_on:
+      runner:
+        condition: service_healthy
+  proxy:
+    image: itzg/mc-proxy
+    environment:
+      TYPE: "VELOCITY"
+      PLUGINS: "https://hangarcdn.papermc.io/plugins/ViaVersion/ViaVersion/versions/5.10.0/PAPER/ViaVersion-5.10.0.jar" # Bump this on each release
+      JVM_OPTS: "-Dvelocity.packet-decode-logging=true"
+      INIT_MEMORY: "50M"
+      MAX_MEMORY: "2G"
+    ports:
+      - "25565:25565"
+    volumes:
+      - ./data/internalServerData/proxy:/server
+      - ./config/velocity:/config
+      - ./server-icon.png:/server/server-icon.png
+      - ./java/velocity/target/VelocityRouter-0.0.0.jar:/plugins/VelocityRouter.jar
+    networks:
+      - app_network
+    depends_on:
+      runner:
+        condition: service_healthy
+networks:
+  app_network:
+    driver: bridge

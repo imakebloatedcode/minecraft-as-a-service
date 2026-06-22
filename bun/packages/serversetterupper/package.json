@@ -1,0 +1,17 @@
+{
+  "name": "@mcman/serversetterupper",
+  "module": "src/index.ts",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5",
+    "zod": "^4.4.3"
+  },
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "smol-toml": "^1.6.1",
+    "@mcman/deepmerge": "workspace:*"
+  }
+}

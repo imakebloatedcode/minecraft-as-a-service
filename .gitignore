@@ -1,0 +1,12 @@
+# Built java plugins
+target/
+# Database
+data/
+# Logs
+logs/
+# Maven cache
+.m2/
+# Vscode
+.vscode/
+# Junk
+.junk

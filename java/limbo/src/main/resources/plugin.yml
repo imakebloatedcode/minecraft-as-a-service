@@ -1,0 +1,4 @@
+name: ServerLimbo
+main: com.imakebloatedcode.limboplugin.ConnectionMessagePlugin
+version: 0.0.0
+author: Imakebloatedcode

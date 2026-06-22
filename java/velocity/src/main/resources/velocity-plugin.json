@@ -1,0 +1,7 @@
+{
+  "id": "velocityrouter",
+  "name": "VelocityRouter",
+  "version": "2026.6.6",
+  "main": "com.imakebloatedcode.velocityrouter.VelocityServerPlugin",
+  "authors": ["Imakebloatedcode"]
+}
