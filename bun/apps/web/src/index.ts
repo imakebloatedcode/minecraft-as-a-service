@@ -54,7 +54,9 @@ async function s3ClearPrefix(prefix: string) {
     await Promise.all(promises);
   }
 }
-
+function rng() {
+  return crypto.getRandomValues(new Uint32Array(1))[0]!;
+}
 async function main() {
   await mongoClient.connect();
   await redisClient.connect();
@@ -74,6 +76,55 @@ async function main() {
   if (jwtKey instanceof Binary) {
     jwtKey = jwtKey.buffer as Uint8Array;
   }
+  // Redis helpers
+  let waitResponseRpc: (txid: number) => Promise<void>;
+  {
+    const confirmEmitter = new EventEmitter<{ msg: [number] }>();
+    await redisSubClient.subscribe(
+      apiDefinitions.RedisTypes.ConfirmedRpc.Output.key,
+      (message) => {
+        const decoded: apiDefinitions.RedisTypes.ConfirmedRpc.Output.Output =
+          messagepackDecode(Uint8Array.fromBase64(message));
+        confirmEmitter.emit("msg", decoded.txid);
+      },
+    );
+    waitResponseRpc = (txid) => {
+      return new Promise((resolve) => {
+        const listener = (gotTxid: number) => {
+          if (txid === gotTxid) {
+            confirmEmitter.removeListener("msg", listener);
+            resolve();
+          }
+        };
+        confirmEmitter.on("msg", listener);
+      });
+    };
+  }
+  async function getServerStatus(
+    id: string,
+  ): Promise<
+    | { success: false; response: Response }
+    | { success: true; data: apiDefinitions.RedisTypes.ServerStatus.Value }
+  > {
+    const serverKey: apiDefinitions.RedisTypes.ServerStatus.Key = `serverStatus:${id}`;
+    const serverInfoResponse = await redisClient.getBuffer(serverKey);
+    if (serverInfoResponse === null) {
+      const response: apiDefinitions.ApiTypes.BaseTypes.FailedApiResponse = {
+        errorMessage: apiDefinitions.ApiTypes.BaseTypes.ErrorMessages.unknownId,
+      };
+      return {
+        success: false,
+        response: Response.json(response, { status: 401 }),
+      };
+    }
+    return {
+      success: true,
+      data: apiDefinitions.RedisTypes.ServerStatus.Value.parse(
+        messagepackDecode(serverInfoResponse),
+      ),
+    };
+  }
+  // Mongodb helpers
   // {username: string}
   const usersCollection = db.collection("users");
   // ServerConfigAll
@@ -127,30 +178,7 @@ async function main() {
       }
     }
   }
-  async function getServerStatus(
-    id: string,
-  ): Promise<
-    | { success: false; response: Response }
-    | { success: true; data: apiDefinitions.RedisTypes.ServerStatus.Value }
-  > {
-    const serverKey: apiDefinitions.RedisTypes.ServerStatus.Key = `serverStatus:${id}`;
-    const serverInfoResponse = await redisClient.getBuffer(serverKey);
-    if (serverInfoResponse === null) {
-      const response: apiDefinitions.ApiTypes.BaseTypes.FailedApiResponse = {
-        errorMessage: apiDefinitions.ApiTypes.BaseTypes.ErrorMessages.unknownId,
-      };
-      return {
-        success: false,
-        response: Response.json(response, { status: 401 }),
-      };
-    }
-    return {
-      success: true,
-      data: apiDefinitions.RedisTypes.ServerStatus.Value.parse(
-        messagepackDecode(serverInfoResponse),
-      ),
-    };
-  }
+
   async function serverDatabaseEntryToApiResponse(
     databaseEntry: WithId<apiDefinitions.DatabaseTypes.ServerEntry>,
   ): Promise<apiDefinitions.ManagementTypes.ServerInformation> {
@@ -447,7 +475,7 @@ async function main() {
             const uuid = Bun.randomUUIDv7();
             const databaseEntry: apiDefinitions.DatabaseTypes.ServerEntry = {
               configuration: data.configuration,
-              information: { id: uuid, owner: username, deleted: false },
+              information: { id: uuid, owner: username, suspended: true },
             };
             await serversCollection.insertOne(databaseEntry);
             const response: apiDefinitions.ApiTypes.ServerManagement.ServerCreate.Response =
@@ -477,16 +505,25 @@ async function main() {
             }
             const entry = databaseQuery.databaseEntry;
             {
+              // Stop server
+              const txid = rng();
+              const message: apiDefinitions.RedisTypes.ServerRunControl.Value =
+                { txid, item: entry, type: "stop", destructive: true };
+              const key: apiDefinitions.RedisTypes.ServerRunControl.Key =
+                "src-i";
+              await redisClient.publish(
+                key,
+                messagepackEncode(message).toBase64(),
+              );
+              await waitResponseRpc(txid);
+            }
+
+            {
               // Delete s3 data
               await s3ClearPrefix(`servers/${id}`);
             }
-            await serversCollection.replaceOne(
-              { _id: entry._id },
-              {
-                configuration: entry.configuration,
-                information: { ...entry.information, deleted: true },
-              },
-            );
+
+            // Delete from database
             await serversCollection.deleteOne({ _id: entry._id });
             const response: apiDefinitions.ApiTypes.ServerManagement.ServerDelete.Response =
               {};
@@ -580,9 +617,6 @@ async function main() {
                           }
                         };
                         messagesEvents.on("data", listenerWrapper);
-                      }
-                      function rng() {
-                        return crypto.getRandomValues(new Uint32Array(1))[0]!;
                       }
                       const subscriptionId = rng();
                       return {
@@ -737,6 +771,45 @@ async function main() {
               { _id: databaseQuery.databaseEntry._id },
               newDatabaseEntry,
             );
+            // Restart server to apply new config
+            if (!databaseQuery.databaseEntry.information.suspended) {
+              (async () => {
+                if (databaseQuery.databaseEntry.configuration.enabled) {
+                  const key: apiDefinitions.RedisTypes.ServerRunControl.Key =
+                    "src-i";
+                  const txid = rng();
+                  const message: apiDefinitions.RedisTypes.ServerRunControl.Value =
+                    {
+                      type: "stop",
+                      item: newDatabaseEntry,
+                      txid,
+                      destructive: false,
+                    };
+                  await redisClient.publish(
+                    key,
+                    messagepackEncode(message).toBase64(),
+                  );
+                  await waitResponseRpc(txid);
+                }
+                if (newDatabaseEntry.configuration.enabled) {
+                  const key: apiDefinitions.RedisTypes.ServerRunControl.Key =
+                    "src-i";
+                  const txid = rng();
+                  const message: apiDefinitions.RedisTypes.ServerRunControl.Value =
+                    {
+                      type: "start",
+                      item: newDatabaseEntry,
+                      txid,
+                      destructive: false,
+                    };
+                  await redisClient.publish(
+                    key,
+                    messagepackEncode(message).toBase64(),
+                  );
+                  await waitResponseRpc(txid);
+                }
+              })();
+            }
             const response: apiDefinitions.ApiTypes.ServerManagement.ServerConfig.Response =
               {};
             return Response.json(response);
@@ -907,52 +980,77 @@ async function main() {
                   messagepackDecode(tokenInfo),
                 );
             }
+            // Invalidate the token
+            await redisClient.del(connectionTokenKey);
 
+            // Get the server from the database
+            {
+              let databaseEntry: apiDefinitions.DatabaseTypes.ServerEntry;
+              {
+                const username = checkedAuth.data?.payload.username as
+                  | string
+                  | undefined;
+                const databaseQuery = await getServerById(
+                  data.id,
+                  username,
+                  false,
+                );
+                if (databaseQuery.success === false) {
+                  const response: apiDefinitions.ApiTypes.BaseTypes.FailedApiResponse =
+                    {
+                      errorMessage:
+                        apiDefinitions.ApiTypes.BaseTypes.ErrorMessages
+                          .unknownId,
+                    };
+                  return Response.json(response);
+                } else {
+                  databaseEntry = databaseQuery.databaseEntry;
+                  if (databaseQuery.databaseEntry.configuration.public) {
+                    // Always let the user into a public server
+                  } else if (
+                    checkedAuth.data &&
+                    databaseQuery.databaseEntry.information.owner ===
+                      (checkedAuth.data.payload.username as string)
+                  ) {
+                    // The user owns the server
+                  } else {
+                    // The user does not own the server and the server is private
+                    const response: apiDefinitions.ApiTypes.BaseTypes.FailedApiResponse =
+                      {
+                        errorMessage: data.token
+                          ? apiDefinitions.ApiTypes.BaseTypes.ErrorMessages
+                              .unauthorized
+                          : apiDefinitions.ApiTypes.BaseTypes.ErrorMessages
+                              .requiresAuth,
+                      };
+                    return Response.json(response);
+                  }
+                }
+              }
+              if (databaseEntry.information.suspended) {
+                const key: apiDefinitions.RedisTypes.ServerRunControl.Key =
+                  "src-i";
+                const txid = rng();
+                const body: apiDefinitions.RedisTypes.ServerRunControl.Value = {
+                  type: "start",
+                  item: databaseEntry,
+                  txid,
+                  destructive: false,
+                };
+                const finishPromise = waitResponseRpc(txid);
+                await redisClient.publish(
+                  key,
+                  messagepackEncode(body).toBase64(),
+                );
+                await finishPromise;
+              }
+            }
             // Grab server info
             const serverInfoRes = await getServerStatus(data.id);
             if (!serverInfoRes.success) {
               return serverInfoRes.response;
             }
-            // Get the server from the database (the previous uses redis which is cheaper and eliminates the possibility of the server being off)
-            {
-              const username = checkedAuth.data?.payload.username as
-                | string
-                | undefined;
-              const databaseQuery = await getServerById(
-                data.id,
-                username,
-                false,
-              );
-              if (databaseQuery.success === false) {
-                const response: apiDefinitions.ApiTypes.BaseTypes.FailedApiResponse =
-                  {
-                    errorMessage:
-                      apiDefinitions.ApiTypes.BaseTypes.ErrorMessages.unknownId,
-                  };
-                return Response.json(response);
-              } else {
-                if (databaseQuery.databaseEntry.configuration.public) {
-                  // Always let the user into a public server
-                } else if (
-                  checkedAuth.data &&
-                  databaseQuery.databaseEntry.information.owner ===
-                    (checkedAuth.data.payload.username as string)
-                ) {
-                  // The user owns the server
-                } else {
-                  // The user does not own the server and the server is private
-                  const response: apiDefinitions.ApiTypes.BaseTypes.FailedApiResponse =
-                    {
-                      errorMessage: data.token
-                        ? apiDefinitions.ApiTypes.BaseTypes.ErrorMessages
-                            .unauthorized
-                        : apiDefinitions.ApiTypes.BaseTypes.ErrorMessages
-                            .requiresAuth,
-                    };
-                  return Response.json(response);
-                }
-              }
-            }
+            // Send player to server
             const parsedServerInfo = serverInfoRes.data;
             {
               const command: apiDefinitions.JavaCommunicationTypes.Proxy.Request.Switch =
@@ -968,7 +1066,6 @@ async function main() {
                 messagepackEncode(command).toBase64(),
               );
             }
-            await redisClient.del(connectionTokenKey);
             const responseBody: apiDefinitions.ApiTypes.ServerConnectionAuth.Connect.Response =
               {};
             return Response.json(responseBody);

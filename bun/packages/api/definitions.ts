@@ -145,7 +145,7 @@ export namespace DatabaseTypes {
   export const ServerEntry = z.object({
     configuration: ManagementTypes.ServerConfiguration,
     information: z.extend(ManagementTypes.ImmutableServerInformation, {
-      deleted: z._default(z.boolean(), false),
+      suspended: z.boolean(),
     }),
   });
   export type ServerEntry = z.infer<typeof ServerEntry>;
@@ -426,6 +426,16 @@ export namespace JavaCommunicationTypes {
 }
 
 export namespace RedisTypes {
+  export namespace ConfirmedRpc {
+    export const Input = z.object({ txid: z.number() });
+    export type Input = z.infer<typeof Input>;
+
+    export namespace Output {
+      export const key = "rpc-c";
+      export const Output = z.object({ txid: z.number() });
+      export type Output = z.infer<typeof Output>;
+    }
+  }
   export namespace ServerConnectionAuthToken {
     export type Key = `srt:${string}`;
     export const Value = z.object({
@@ -441,6 +451,16 @@ export namespace RedisTypes {
       JavaCommunicationTypes.Proxy.Request.Kick,
       JavaCommunicationTypes.Proxy.Request.Switch,
     ]);
+    export type Value = z.infer<typeof Value>;
+  }
+  // Server start control
+  export namespace ServerRunControl {
+    export type Key = `src-i`;
+    export const Value = z.extend(ConfirmedRpc.Input, {
+      type: z.union([z.literal("start"), z.literal("stop")]),
+      item: DatabaseTypes.ServerEntry,
+      destructive: z.boolean(),
+    });
     export type Value = z.infer<typeof Value>;
   }
   // Server info

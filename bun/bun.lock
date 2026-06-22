@@ -19,6 +19,7 @@
         "@types/node": "^25.9.3",
         "crockford-base32": "^2.1.0",
         "dockerode": "^5.0.0",
+        "minecraftstatuspinger": "^1.2.2",
         "mongodb": "^7.3.0",
         "msgpackr": "^2.0.4",
         "tar-fs": "^3.1.2",
@@ -513,6 +514,8 @@
     "mime-db": ["mime-db@1.54.0", "", {}, "sha512-aU5EJuIN2WDemCcAp2vFBfp/m4EAhWJnUNSSw0ixs7/kXbd6Pg64EmwJkNdFhB8aWt1sH2CTXrLxo/iAGV3oPQ=="],
 
     "mime-types": ["mime-types@3.0.2", "", { "dependencies": { "mime-db": "^1.54.0" } }, "sha512-Lbgzdk0h4juoQ9fCKXW4by0UJqj+nOOrI9MJ1sSj4nI8aI2eo1qmvQEie4VD1glsS250n15LsWsYtCugiStS5A=="],
+
+    "minecraftstatuspinger": ["minecraftstatuspinger@1.2.2", "", {}, "sha512-3PDWcifjw6cliGnGqw0+nJVWWPOcpLDyNLh4D84vCNzPD2h9REbN5Ne11I//CMkIu5xJiIuyGwI44gyRYYbpuw=="],
 
     "minisearch": ["minisearch@7.2.0", "", {}, "sha512-dqT2XBYUOZOiC5t2HRnwADjhNS2cecp9u+TJRiJ1Qp/f5qjkeT5APcGPjHw+bz89Ms8Jp+cG4AlE+QZ/QnDglg=="],
 

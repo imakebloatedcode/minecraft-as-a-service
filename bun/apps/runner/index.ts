@@ -22,6 +22,7 @@ import { rm } from "node:fs/promises";
 import { copyFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { FIFO } from "./fifo";
+import { lookup } from "minecraftstatuspinger";
 
 // Connection URL
 const mongoUrl = process.env.DATABASE_URI ?? "mongodb://localhost:27017";
@@ -63,6 +64,12 @@ function debounceResource(
     clearTimeout(debounceMap.get(id)!);
   }
   debounceMap.set(id, setTimeout(callback, timeout));
+}
+function clearDebounce(id: string) {
+  if (debounceMap.has(id)) {
+    clearTimeout(debounceMap.get(id)!);
+    debounceMap.delete(id);
+  }
 }
 
 async function pullImage(image: string) {
@@ -130,6 +137,7 @@ async function mainCode() {
             });
             const encodedRedis = messagepackEncode(decodedRedis);
             await redisClient.set(key, encodedRedis);
+            await redisClient.publish(`mutate:${key}`, encodedRedis.toBase64());
           }
         } else if (decoded.type === "playerDisconnection") {
           const key: apiDefinitions.RedisTypes.ServerStatus.Key = `serverStatus:${decoded.serverUuid}`;
@@ -151,6 +159,7 @@ async function mainCode() {
             );
             const encodedRedis = messagepackEncode(decodedRedis);
             await redisClient.set(key, encodedRedis);
+            await redisClient.publish(`mutate:${key}`, encodedRedis.toBase64());
           }
         } else {
           // @ts-ignore
@@ -305,11 +314,36 @@ async function mainCode() {
 
     const tempDir = process.env.DATA_TEMPDIR ?? tmpdir();
 
+    /**
+     * Set a server's state to suspended in the db
+     * @param serverId The server id
+     * @param suspended If the server is suspended
+     * @returns If the operation succeeded
+     */
+    async function setServerSuspendedDb(
+      serverId: apiDefinitions.ManagementTypes.ServerUUID,
+      suspended: boolean,
+    ): Promise<boolean> {
+      return (
+        (
+          await serversCollection.updateOne(
+            {
+              "information.id": serverId,
+            },
+            {
+              $set: {
+                "information.suspended": suspended,
+              },
+            },
+          )
+        ).matchedCount !== 0
+      );
+    }
     async function createContainer(
       item: apiDefinitions.DatabaseTypes.ServerEntry,
     ) {
       if (!item.configuration.enabled) {
-        return;
+        throw new Error("Can not create a disabled container");
       }
       console.log(`Starting minecraft server id ${item.information.id}`);
       const launchInformation = await launchInfo(
@@ -633,6 +667,51 @@ async function mainCode() {
           saveLock.release();
           console.log(`Saved minecraft server id ${item.information.id}`);
         }
+        const serverStatus: apiDefinitions.RedisTypes.ServerStatus.Value = {
+          ip: dockerIp,
+          port: Number(ports![0]!.HostPort),
+          players: [],
+        };
+        {
+          const key: apiDefinitions.RedisTypes.ServerStatus.Key = `serverStatus:${serverId}`;
+          await redisClient.set(key, messagepackEncode(serverStatus));
+
+          {
+            const debounceKey = `serverShutdown:${serverId}`;
+            function handleZero() {
+              debounceResource(
+                debounceKey,
+                async () => {
+                  // Suspend server. There is no clean way of keeping the database/server status exactly aligned when this is happening, but oh well.
+                  if (!setServerSuspendedDb(serverId, true)) {
+                    console.warn(
+                      "Failed to update the suspended property in the database. Cancelling suspend. (item not found)",
+                    );
+                  } else {
+                    await stopContainer(serverId, false);
+                  }
+                },
+                5 * 60 * 1000,
+              );
+            }
+            // There are initially 0 players
+            handleZero();
+            // Watch player list
+            unsubscribeList.push(`mutate:${key}`);
+            redisSubClient.subscribe(`mutate:${key}`, (encodedData) => {
+              const decoded: apiDefinitions.RedisTypes.ServerStatus.Value =
+                messagepackDecode(Uint8Array.fromBase64(encodedData));
+              const numPlayers = decoded.players.length;
+
+              // Timeout is 5 minutes
+              if (numPlayers === 0) {
+                handleZero();
+              } else {
+                clearDebounce(debounceKey);
+              }
+            });
+          }
+        }
         // Tasks are run once every 5 s
         runningContainers.set(serverId, {
           container,
@@ -656,17 +735,25 @@ async function mainCode() {
             console.log(`Stopped minecraft server id ${item.information.id}`);
           },
         });
-        {
-          const serverStatus: apiDefinitions.RedisTypes.ServerStatus.Value = {
-            ip: dockerIp,
-            port: Number(ports![0]!.HostPort),
-            players: [],
-          };
-          await redisClient.set(
-            `serverStatus:${serverId}`,
-            messagepackEncode(serverStatus),
-          );
-        }
+        return {
+          healthcheck: async () => {
+            try {
+              await lookup({
+                host: serverStatus.ip,
+                port: serverStatus.port,
+                timeout: 1000,
+                protocolVersion: 769,
+                throwOnParseError: false,
+                SRVLookup: false,
+                JSONParse: true,
+              });
+
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        };
       }
     }
     async function stopContainer(id: string, destructive: boolean = false) {
@@ -685,7 +772,11 @@ async function mainCode() {
     for await (const _item of serversCollection.find({})) {
       const item = _item as WithId<apiDefinitions.DatabaseTypes.ServerEntry>;
       try {
-        await createContainer(item);
+        if (await setServerSuspendedDb(item.information.id, true)) {
+          console.warn("Suspended server id " + item.information.id);
+        } else {
+          console.log("Failed to suspend server id " + item.information.id);
+        }
       } catch (e) {
         console.error(e);
       }
@@ -698,32 +789,49 @@ async function mainCode() {
         }
       }
     }, 1000);
-    const emitter = serversCollection.watch().on("change", (change) => {
-      if (
-        ["update", "modify", "replace", "create", "insert"].includes(
-          change.operationType,
+
+    function respondTx(txid: number) {
+      const message: apiDefinitions.RedisTypes.ConfirmedRpc.Output.Output = {
+        txid,
+      };
+      return redisClient
+        .publish(
+          apiDefinitions.RedisTypes.ConfirmedRpc.Output.key,
+          messagepackEncode(message).toBase64(),
         )
-      ) {
-        const newItem = (change as any)
-          .fullDocument as unknown as apiDefinitions.DatabaseTypes.ServerEntry;
-        debounceResource(newItem.information.id, async () => {
-          if (runningContainers.has(newItem.information.id)) {
-            stopContainer(newItem.information.id, newItem.information.deleted);
-          }
-          if (!newItem.information.deleted) {
-            try {
-              await createContainer(newItem);
-            } catch (e) {
-              console.error(e);
+        .then(() => {});
+    }
+    {
+      const key: apiDefinitions.RedisTypes.ServerRunControl.Key = "src-i";
+      redisSubClient.subscribe(key, async (message) => {
+        const decoded: apiDefinitions.RedisTypes.ServerRunControl.Value =
+          messagepackDecode(Uint8Array.fromBase64(message));
+        if (decoded.type === "start") {
+          if (runningContainers.has(decoded.item.information.id)) {
+            console.warn("Can not start a running server");
+          } else {
+            await setServerSuspendedDb(decoded.item.information.id, false);
+            const result = await createContainer(decoded.item);
+            while (!(await result.healthcheck())) {
+              await new Promise((r) => setTimeout(r, 1000));
             }
           }
-        });
-      }
-    });
+        } else if (decoded.type === "stop") {
+          if (!runningContainers.has(decoded.item.information.id)) {
+            console.warn("Can not stop a non-running server");
+          } else {
+            await stopContainer(
+              decoded.item.information.id,
+              decoded.destructive,
+            );
+          }
+        }
+        await respondTx(decoded.txid);
+      });
+    }
     return {
       terminate: async () => {
         clearInterval(checkInterval);
-        emitter.removeAllListeners("change");
         await Promise.all(
           Array.from(runningContainers.keys()).map((id) =>
             stopContainer(id).catch(console.error),
