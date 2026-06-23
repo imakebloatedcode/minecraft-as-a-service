@@ -403,28 +403,40 @@ const Register = () => {
 const SidebarLayout: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
+  const { auth } = useAuth();
   return (
     <div className="min-h-screen flex bg-background">
       <aside className="w-64 border-r bg-muted/40 p-4 space-y-4">
         <div className="text-lg font-bold">MC Server Manager</div>
 
         <nav className="flex flex-col gap-2">
+          {auth.username !== undefined && (
+            <Link
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              to="/dashboard/my-servers"
+            >
+              My Servers
+            </Link>
+          )}
+
           <Link
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             to="/dashboard/servers"
           >
-            My Servers
+            All Servers
           </Link>
 
-          <Link
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            to="/dashboard/all-servers"
-          >
-            Search Servers
-          </Link>
+          {auth.username === undefined && (
+            <Link
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              to="/login"
+            >
+              Login
+            </Link>
+          )}
         </nav>
 
-        <AccountMenu />
+        {auth.username !== undefined && <AccountMenu />}
       </aside>
 
       <main className="flex-1">{children}</main>
@@ -1651,7 +1663,7 @@ const ServerConfigurationInternal = ({
     <div className="p-6 grid grid-cols-[220px_1fr] gap-6">
       <Card>
         <CardContent className="space-y-2 pt-4">
-          {allConfigGroups.map((g) => (
+          {allowedConfigGroups.map((g) => (
             <Button
               key={g}
               variant={activeGroup === g ? "default" : "ghost"}
@@ -1966,9 +1978,9 @@ const ServerAuthCallback = () => {
 const Dashboard = () => (
   <SidebarLayout>
     <Routes>
-      <Route path="/servers" element={<ServerList />} />
+      <Route path="/servers" element={<AllServers onlyEnabled={true} />} />
       <Route path="/servers/:id" element={<ServerDetail />} />
-      <Route path="/all-servers" element={<AllServers onlyEnabled={true} />} />
+      <Route path="/my-servers" element={<ServerList />} />
     </Routes>
   </SidebarLayout>
 );

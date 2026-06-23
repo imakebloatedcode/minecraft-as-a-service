@@ -142,10 +142,15 @@ export class ApiClient {
       const tokenStatus = (() => {
         if (type.request._zod.def.type === "union") {
           const hasPossibleTokenItems = type.request._zod.def.options.map(
-            (v) => [
-              "token" in v._zod.def.shape,
-              v._zod.def.shape["token"]!._zod.def.type === "optional",
-            ],
+            (v) => {
+              const hasToken = "token" in v._zod.def.shape;
+              return [
+                hasToken,
+                hasToken
+                  ? v._zod.def.shape["token"]!._zod.def.type === "optional"
+                  : false,
+              ];
+            },
           );
           if (hasPossibleTokenItems.every((v) => v[0] === true)) {
             return [true, hasPossibleTokenItems.every((v) => v[1] === true)];
@@ -157,9 +162,13 @@ export class ApiClient {
             );
           }
         } else {
+          const hasToken = "token" in type.request._zod.def.shape;
           return [
-            "token" in type.request._zod.def.shape,
-            type.request._zod.def.shape["token"]!._zod.def.type === "optional",
+            hasToken,
+            hasToken
+              ? type.request._zod.def.shape["token"]!._zod.def.type ===
+                "optional"
+              : false,
           ];
         }
       })();
