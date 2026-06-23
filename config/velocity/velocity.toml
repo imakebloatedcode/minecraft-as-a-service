@@ -4,7 +4,7 @@ config-version = "2.8"
 bind = "0.0.0.0:25565"
 # What should be the MOTD? This gets displayed when the player adds your server to
 # their server list. Only MiniMessage format is accepted.
-motd = "<#09add3>A Velocity Server"
+motd = "<obfuscated><blue>iii</blue></obfuscated> <green>A</green> <red><italic>bloated</italic></red> <green>minecraft server host</green> <obfuscated><blue>iii</blue></obfuscated>"
 # What should we display for the maximum number of players? (Velocity does not support a cap
 # on the number of players online.)
 show-max-players = 500
