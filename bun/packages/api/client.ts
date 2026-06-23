@@ -68,7 +68,9 @@ export class ApiClient {
     return (decoded as any).username as string;
   }
 
-  private async getToken(): Promise<string> {
+  private async getToken<O extends boolean>(
+    optional: O,
+  ): Promise<string | (O extends true ? undefined : never)> {
     if (this.token) {
       const expired = isExpired(this.token, this.refreshSkewSeconds);
 
@@ -78,7 +80,14 @@ export class ApiClient {
     }
 
     if (!this.refreshToken) {
-      throw new Error("Missing both token and refresh token, can not continue");
+      if (optional) {
+        // @ts-ignore
+        return undefined;
+      } else {
+        throw new Error(
+          "Missing both token and refresh token, can not continue",
+        );
+      }
     }
 
     if (!this.refreshPromise) {
@@ -130,27 +139,32 @@ export class ApiClient {
   ): Promise<z.infer<TResponse>> {
     if (!("token" in options.body)) {
       // Check if a token is expected, and if so add it
-      if (
-        (() => {
-          if (type.request._zod.def.type === "union") {
-            const hasPossibleTokenItems = type.request._zod.def.options.map(
-              (v) => "token" in v._zod.def.shape,
-            );
-            if (hasPossibleTokenItems.every((v) => v === true)) {
-              return true;
-            } else if (hasPossibleTokenItems.every((v) => v === false)) {
-              return false;
-            } else {
-              throw new Error(
-                `Inconsistent token support for api endpoint. Can not continue with automatic token adding`,
-              );
-            }
+      const tokenStatus = (() => {
+        if (type.request._zod.def.type === "union") {
+          const hasPossibleTokenItems = type.request._zod.def.options.map(
+            (v) => [
+              "token" in v._zod.def.shape,
+              v._zod.def.shape["token"]!._zod.def.type === "optional",
+            ],
+          );
+          if (hasPossibleTokenItems.every((v) => v[0] === true)) {
+            return [true, hasPossibleTokenItems.every((v) => v[1] === true)];
+          } else if (hasPossibleTokenItems.every((v) => v[0] === false)) {
+            return [false, false];
           } else {
-            return "token" in type.request._zod.def.shape;
+            throw new Error(
+              `Inconsistent token support for api endpoint. Can not continue with automatic token adding`,
+            );
           }
-        })()
-      ) {
-        const token = await this.getToken();
+        } else {
+          return [
+            "token" in type.request._zod.def.shape,
+            type.request._zod.def.shape["token"]!._zod.def.type === "optional",
+          ];
+        }
+      })();
+      if (tokenStatus[0]!) {
+        const token = await this.getToken(tokenStatus[1]!);
         // FIX THIS SECTION -- START
         options.body ??= {} as any;
         (options.body as any).token = token;
@@ -299,7 +313,7 @@ export class ApiClient {
         "token",
         "token" in body && body.token !== undefined
           ? body.token
-          : await this.getToken(),
+          : await this.getToken(false),
       );
       const websocketConnection = new WebSocket(connectionUrl);
       websocketConnection.binaryType = "arraybuffer";
@@ -313,7 +327,7 @@ export class ApiClient {
             if (typeof event.data === "string") {
               const responseData = JSON.parse(event.data);
               if ("errorMessage" in responseData) {
-                throw new Error(responseData.errorMessage);
+                this.throwApiError(responseData.errorMessage);
               }
               const parsed =
                 ApiTypes.ServerManagement.ServerTty.Response.parse(

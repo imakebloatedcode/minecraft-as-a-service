@@ -232,7 +232,7 @@ export namespace ApiTypes {
 
     // GET /api/server/:id/config?token=...
     export namespace ServerConfigQuery {
-      export const Request = z.extend(BaseTypes.AuthorizedApiRequest, {});
+      export const Request = z.extend(BaseTypes.ApiRequest, {});
       export type Request = z.infer<typeof Request>;
       export const Response = z.extend(BaseTypes.SuccessfulApiResponse, {
         information: ManagementTypes.ServerInformation,

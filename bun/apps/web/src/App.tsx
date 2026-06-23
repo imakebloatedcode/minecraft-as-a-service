@@ -787,14 +787,23 @@ const AllServers = ({
 // SERVER DETAIL
 // ---------------------------
 
-const configGroups = [
+const allConfigGroups = [
   "Metadata",
   "Server configuration",
   "Player list",
   "Terminal",
   "Danger zone",
 ] as const;
-const savableConfigGroups: (typeof configGroups)[number][] = [
+const everyoneConfigGroups: (typeof allConfigGroups)[number][] = [
+  "Metadata",
+  "Server configuration",
+  "Player list",
+];
+const ownerOnlyConfigGroups: (typeof allConfigGroups)[number][] = [
+  "Terminal",
+  "Danger zone",
+];
+const savableConfigGroups: (typeof allConfigGroups)[number][] = [
   "Metadata",
   "Server configuration",
 ];
@@ -1307,6 +1316,7 @@ const ServerConfigurationInternal = ({
   api,
   auth,
   id,
+  owned,
 }: {
   rendered: ReturnType<typeof renderCombinedMappings>;
   initialData: Awaited<
@@ -1315,15 +1325,20 @@ const ServerConfigurationInternal = ({
   api: apiClient.ApiClient;
   auth: AuthState;
   id: string;
+  owned: boolean;
 }) => {
+  const allowedConfigGroups = [
+    ...everyoneConfigGroups,
+    ...(owned ? ownerOnlyConfigGroups : []),
+  ];
   const [config, setConfig] =
     useState<apiDefinitions.ManagementTypes.ServerConfiguration>(
       structuredClone(initialData.information.configuration),
     );
   const [fileUploads, setFileUploads] = useState<Record<string, File>>({});
-  const [activeGroup, setActiveGroup] = useState<(typeof configGroups)[number]>(
-    configGroups[0],
-  );
+  const [activeGroup, setActiveGroup] = useState<
+    (typeof allConfigGroups)[number]
+  >(allowedConfigGroups[0]!);
 
   const save = () =>
     toast
@@ -1636,7 +1651,7 @@ const ServerConfigurationInternal = ({
     <div className="p-6 grid grid-cols-[220px_1fr] gap-6">
       <Card>
         <CardContent className="space-y-2 pt-4">
-          {configGroups.map((g) => (
+          {allConfigGroups.map((g) => (
             <Button
               key={g}
               variant={activeGroup === g ? "default" : "ghost"}
@@ -1765,7 +1780,7 @@ const ServerConfigurationInternal = ({
             </div>
           )}
 
-          {...savableConfigGroups.includes(activeGroup)
+          {...savableConfigGroups.includes(activeGroup) && owned
             ? [
                 <Separator className="my-4" />,
                 <Button onClick={save}>Save Changes</Button>,
@@ -1823,6 +1838,7 @@ const ServerDetail = () => {
   if (initialConfig === null || !id) {
     return <div className="p-6">Loading...</div>;
   } else {
+    const owned = initialConfig.information.information.owner === auth.username;
     return (
       <ServerConfigurationInternal
         rendered={rendered}
@@ -1830,6 +1846,7 @@ const ServerDetail = () => {
         api={api}
         auth={auth}
         id={id}
+        owned={owned}
       />
     );
   }
@@ -1947,18 +1964,13 @@ const ServerAuthCallback = () => {
 // ---------------------------
 
 const Dashboard = () => (
-  <RequireAuth>
-    <SidebarLayout>
-      <Routes>
-        <Route path="/servers" element={<ServerList />} />
-        <Route path="/servers/:id" element={<ServerDetail />} />
-        <Route
-          path="/all-servers"
-          element={<AllServers onlyEnabled={true} />}
-        />
-      </Routes>
-    </SidebarLayout>
-  </RequireAuth>
+  <SidebarLayout>
+    <Routes>
+      <Route path="/servers" element={<ServerList />} />
+      <Route path="/servers/:id" element={<ServerDetail />} />
+      <Route path="/all-servers" element={<AllServers onlyEnabled={true} />} />
+    </Routes>
+  </SidebarLayout>
 );
 
 const ServerAuth = () => (
