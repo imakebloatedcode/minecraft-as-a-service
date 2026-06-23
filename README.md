@@ -1,6 +1,9 @@
 # Minecraft as a Service
 
 A self-hosted website to create and manage minecraft servers, with a mostly scalable architecture.
+This was created in order to allow me to self-host minecraft servers, but I decided to put it on github because why not. It currently does not have any measures to restrict hosting minecraft servers to specific users, but those could be implemented quickly.
+It is intended to host large numbers of minecraft servers, and therefore shuts down unused minecraft servers until players join to save resources.
+Unlike most minecraft hosting programs, it uses the vanilla minecraft server instead of paper which breaks redstone and other game physics, which is part of why I made this.
 
 ## Setup
 
