@@ -1885,13 +1885,18 @@ const ServerAuthCallback = () => {
     throw new Error("Missing required search parameters");
   }
   const api = useApi();
-  const connectionPromise = api.serverAuth.connect({
-    connectionToken: token,
-    id,
-  });
+  const connectionPromise = useMemo(
+    () =>
+      api.serverAuth.connect({
+        connectionToken: token,
+        id,
+      }),
+    [token],
+  );
 
   const [status, setStatus] = useState<"loading" | "loaded">("loading");
 
+  // Set state automatically
   useEffect(() => {
     let mounted = true;
 
@@ -1899,16 +1904,12 @@ const ServerAuthCallback = () => {
       if (!mounted) return;
 
       setStatus("loaded");
-
-      setTimeout(() => {
-        window.close();
-      }, 1000);
     });
 
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [connectionPromise]);
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-background">
@@ -1990,6 +1991,9 @@ export const App = () => (
       <ApiProvider>
         <BrowserRouter>
           <Routes>
+            {/*Redirect to dashboard. TODO: Add a home page here*/}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            {/*Authentication routes */}
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             {/* Server authentication */}
