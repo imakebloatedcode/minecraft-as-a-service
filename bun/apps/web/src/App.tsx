@@ -1980,7 +1980,14 @@ const Dashboard = () => (
     <Routes>
       <Route path="/servers" element={<AllServers onlyEnabled={true} />} />
       <Route path="/servers/:id" element={<ServerDetail />} />
-      <Route path="/my-servers" element={<ServerList />} />
+      <Route
+        path="/my-servers"
+        element={
+          <RequireAuth>
+            <ServerList />
+          </RequireAuth>
+        }
+      />
     </Routes>
   </SidebarLayout>
 );
