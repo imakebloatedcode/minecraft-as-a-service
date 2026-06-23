@@ -794,6 +794,10 @@ const configGroups = [
   "Terminal",
   "Danger zone",
 ] as const;
+const savableConfigGroups: (typeof configGroups)[number][] = [
+  "Metadata",
+  "Server configuration",
+];
 
 namespace Rendering {
   interface RenderInstructionBase {
@@ -1761,9 +1765,12 @@ const ServerConfigurationInternal = ({
             </div>
           )}
 
-          <Separator className="my-4" />
-
-          <Button onClick={save}>Save Changes</Button>
+          {...savableConfigGroups.includes(activeGroup)
+            ? [
+                <Separator className="my-4" />,
+                <Button onClick={save}>Save Changes</Button>,
+              ]
+            : []}
         </CardContent>
       </Card>
     </div>
