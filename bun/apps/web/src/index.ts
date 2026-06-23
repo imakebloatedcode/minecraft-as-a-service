@@ -822,6 +822,14 @@ async function main() {
               await req.json(),
             );
             const { username, password } = data;
+            if ((await getUserData(username)).success) {
+              const response: apiDefinitions.ApiTypes.BaseTypes.FailedApiResponse =
+                {
+                  errorMessage:
+                    apiDefinitions.ApiTypes.BaseTypes.ErrorMessages.duplicateId,
+                };
+              return Response.json(response, { status: 403 }); // 403 as duplicates are not allowed
+            }
             const passwordHash = await Bun.password.hash(password);
             const userDatabaseEntry: apiDefinitions.DatabaseTypes.UserEntry = {
               username,

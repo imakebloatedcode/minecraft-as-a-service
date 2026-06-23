@@ -182,6 +182,7 @@ export namespace ApiTypes {
       // RESOURCE
       // I.e unknown server id
       "unknownId" = "Identified resource could not be found",
+      "duplicateId" = "Resource already exists",
     }
     export const SuccessfulApiResponse = z.object({});
     export type SuccessfulApiResponse = z.infer<typeof SuccessfulApiResponse>;
