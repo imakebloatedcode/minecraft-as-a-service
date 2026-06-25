@@ -2,6 +2,12 @@
 
 A self-hosted website to create and manage minecraft servers, with a mostly scalable architecture.
 
+## How to use
+### Create a server
+Create a server using the web UI. The UI should be relatively self-explanatory.
+### Connect to a server
+Connect to the address of the instance with a minecraft client as a server, you will receive a message with a link to select which server to connect to. Select whichever server you want to join, and you will be connected (there may be a delay while the server starts)
+
 ## Why
 To self host minecraft servers!
 
