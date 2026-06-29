@@ -227,6 +227,8 @@ services:
       - "./tmp:/tmpmnt"
       - "./data/downloads:/mc_downloads"
       - "./java/helperJars:/helperJars"
+    stop_grace_period: 5m
+
 
   limbo:
     image: itzg/minecraft-server:latest

@@ -86,6 +86,7 @@ async function pullImage(image: string) {
 const littleEndian = false;
 
 async function mainCode() {
+  const unsubscribeKeysMain: string[] = [];
   await mongoClient.connect();
   await redisClient.connect();
   console.log("Connected to databases");
@@ -109,6 +110,7 @@ async function mainCode() {
         messageListeners.emit("messageFrame", frameU8);
       }
     });
+    unsubscribeKeysMain.push("proxyCommand");
     {
       const port = 61966;
       // We can't use a http server here because we need bidirectional communication. Also: framed binary protocols are fun!
@@ -828,6 +830,7 @@ async function mainCode() {
         }
         await respondTx(decoded.txid);
       });
+      unsubscribeKeysMain.push(key);
     }
     return {
       terminate: async () => {
@@ -837,6 +840,9 @@ async function mainCode() {
             stopContainer(id).catch(console.error),
           ),
         );
+        for (const item of unsubscribeKeysMain) {
+          await redisSubClient.unsubscribe(item);
+        }
       },
     };
   }
@@ -846,6 +852,19 @@ function imageByVersion(version: number) {
   return imageName + ":" + version.toString() + "-jre";
 }
 const controller = mainCode();
-process.addListener("SIGTERM", () => {
-  controller.then((v) => v.terminate());
+process.addListener("SIGTERM", async () => {
+  console.log("Terminating");
+  console.log("Shutting down servers");
+  await (await controller).terminate();
+  // Clear all debounces left over
+  console.log("Clearing debounce timers");
+  for (const item of debounceMap.values()) {
+    clearTimeout(item);
+  }
+  setTimeout(() => {
+    console.log(
+      "Force-exiting as something is keeping the event loop alive and I don't know what",
+    );
+    setTimeout(() => process.exit(1), 1000);
+  }, 2000).unref();
 });
