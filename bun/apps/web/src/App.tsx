@@ -1653,7 +1653,7 @@ const ServerConfigurationInternal = ({
       return elements;
     }
     return buildUi(rendered, config);
-  }, [rendered]);
+  }, [rendered, activeGroup]);
 
   const [confirmDelete, setConfirmDelete] = useState<boolean>(false);
 
